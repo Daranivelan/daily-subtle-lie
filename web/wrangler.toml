@@ -1,0 +1,17 @@
+name = "daily-subtle-lie"
+main = ".open-next/worker.js"
+compatibility_date = "2024-12-30"
+compatibility_flags = ["nodejs_compat", "global_fetch_strictly_public"]
+
+[assets]
+directory = ".open-next/assets"
+binding = "ASSETS"
+
+[[services]]
+binding = "WORKER_SELF_REFERENCE"
+service = "daily-subtle-lie"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "daily-subtle-lie"
+database_id = "ff9ea264-5dbc-4f9b-9de2-4a56dcaaa7cb"

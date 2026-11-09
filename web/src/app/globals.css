@@ -1,0 +1,155 @@
+@import "tailwindcss";
+
+:root,
+html[data-theme="light"] {
+  --bg: #ebe4d8;
+  --bg-elevated: #f6f1e8;
+  --ink: #14181f;
+  --muted: #5b6472;
+  --line: #cfc6b8;
+  --accent: #c45c26;
+  --accent-ink: #fff8f1;
+  --sage: #2f6b4f;
+  --sage-soft: #d7ebe0;
+  --brick: #a33b3b;
+  --brick-soft: #f0d6d6;
+  --glow: rgba(196, 92, 38, 0.18);
+  --grid: rgba(20, 24, 31, 0.06);
+  --shadow: 0 24px 60px rgba(20, 24, 31, 0.12);
+}
+
+html[data-theme="dark"] {
+  --bg: #0e1218;
+  --bg-elevated: #171d27;
+  --ink: #e8e2d6;
+  --muted: #9aa3b2;
+  --line: #2a3342;
+  --accent: #e08a4f;
+  --accent-ink: #1a100a;
+  --sage: #6fbf91;
+  --sage-soft: #1a3228;
+  --brick: #e07a7a;
+  --brick-soft: #3a2222;
+  --glow: rgba(224, 138, 79, 0.2);
+  --grid: rgba(232, 226, 214, 0.05);
+  --shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-bg-elevated: var(--bg-elevated);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-sage: var(--sage);
+  --color-sage-soft: var(--sage-soft);
+  --color-brick: var(--brick);
+  --color-brick-soft: var(--brick-soft);
+  --font-display: var(--font-fraunces);
+  --font-sans: var(--font-source-sans);
+}
+
+html {
+  color-scheme: light dark;
+}
+
+body {
+  background:
+    radial-gradient(ellipse 90% 55% at 0% -10%, var(--glow), transparent 55%),
+    radial-gradient(ellipse 70% 45% at 100% 0%, var(--grid), transparent 50%),
+    linear-gradient(180deg, transparent 0%, transparent 100%),
+    var(--bg);
+  background-attachment: fixed;
+  color: var(--ink);
+  font-family: var(--font-source-sans), system-ui, sans-serif;
+  min-height: 100dvh;
+}
+
+body::before {
+  content: "";
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  background-image:
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(ellipse at center, black 20%, transparent 75%);
+  opacity: 0.7;
+  z-index: 0;
+}
+
+#app-root {
+  position: relative;
+  z-index: 1;
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.92);
+    opacity: 0.55;
+  }
+  70% {
+    transform: scale(1.08);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1.08);
+    opacity: 0;
+  }
+}
+
+@keyframes progress-fill {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+.animate-rise {
+  animation: rise-in 480ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.animate-rise-delay-1 {
+  animation: rise-in 520ms cubic-bezier(0.22, 1, 0.36, 1) 80ms both;
+}
+
+.animate-rise-delay-2 {
+  animation: rise-in 560ms cubic-bezier(0.22, 1, 0.36, 1) 140ms both;
+}
+
+.animate-rise-delay-3 {
+  animation: rise-in 600ms cubic-bezier(0.22, 1, 0.36, 1) 200ms both;
+}
+
+.mode-tile {
+  transition:
+    transform 220ms ease,
+    box-shadow 220ms ease,
+    border-color 220ms ease;
+}
+
+.mode-tile:hover {
+  transform: translateY(-4px) rotate(-0.4deg);
+  box-shadow: var(--shadow);
+}
+
+.progress-bar > span {
+  transform-origin: left center;
+  animation: progress-fill 420ms ease-out both;
+}
