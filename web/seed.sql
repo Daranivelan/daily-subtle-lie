@@ -51,5 +51,5 @@ INSERT OR REPLACE INTO puzzles (
   'The river empties into the Atlantic Ocean near Belém.',
   'https://en.wikipedia.org/wiki/Amazon_River',
   'CC BY-SA 4.0',
-  'review'
+  'approved'
 );

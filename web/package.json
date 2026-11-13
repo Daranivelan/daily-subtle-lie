@@ -12,7 +12,7 @@
     "upload": "opennextjs-cloudflare build && opennextjs-cloudflare upload",
     "cf-typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts",
     "db:local": "wrangler d1 execute daily-subtle-lie --local --file=../schema.sql",
-    "db:seed": "wrangler d1 execute daily-subtle-lie --local --file=./seed.sql && wrangler d1 execute daily-subtle-lie --local --file=./seed-pool.sql"
+    "db:seed": "wrangler d1 execute daily-subtle-lie --local --file=./seed.sql && wrangler d1 execute daily-subtle-lie --local --file=./seed-pool.sql && wrangler d1 execute daily-subtle-lie --local --file=./seed-14-buffer.sql"
   },
   "dependencies": {
     "@opennextjs/cloudflare": "^1.20.16",

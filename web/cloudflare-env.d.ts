@@ -6,6 +6,8 @@ interface __BaseEnv_CloudflareEnv {
 	ASSETS: Fetcher;
 	NEXTJS_ENV: string;
 	ADMIN_TOKEN: string;
+	GEMINI_API_KEY?: string;
+	TYPESAFE_API_KEY?: string;
 	WORKER_SELF_REFERENCE: Fetcher /* daily-subtle-lie */;
 }
 declare namespace Cloudflare {

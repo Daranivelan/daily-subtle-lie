@@ -37,10 +37,24 @@ schema.sql          D1 migration (puzzles + pool_puzzles)
 | `GEMINI_API_KEY` | GH Actions secret | Gemini access |
 | `TYPESAFE_API_KEY` | GH Actions secret | Jev access |
 | `AUTO_APPROVE` | GH Actions var | `"0"` during review; `"1"` to auto-approve |
-| `ADMIN_TOKEN` | Cloudflare Pages/Workers secret + `web/.dev.vars` | Protects `/admin` |
+| `ADMIN_TOKEN` | Cloudflare Worker secret + `web/.dev.vars` | Protects `/admin` |
+| `GEMINI_API_KEY` | Worker secret + `web/.dev.vars` (also GH/generator) | Choose-a-topic Gemini drafts |
+| `TYPESAFE_API_KEY` | Worker secret + `web/.dev.vars` (also GH/generator) | Choose-a-topic Jev checks |
 | `SLACK_WEBHOOK_URL` | GH Actions secret (optional) | Failure notifications |
 
-The Next.js app talks to D1 via the Workers binding — it does **not** need `CF_API_TOKEN`.
+The Next.js app talks to D1 via the Workers binding — it does **not** need `CF_API_TOKEN`.  
+`CF_API_TOKEN` for the generator must include **Account → D1 → Edit** (read-only tokens cannot insert puzzles).
+
+Rebuild the 14-day daily buffer after wiping previous rows:
+
+```bash
+cd generator
+set -a && source .env && set +a
+export AUTO_APPROVE=1 GEMINI_MODEL=gemini-3.5-flash
+python generator.py --reset-daily --daily-only
+```
+
+If the API token cannot write, emit SQL and apply with Wrangler OAuth instead.
 
 ## Setup
 

@@ -1,8 +1,21 @@
+import { Suspense } from "react";
+import Link from "next/link";
 import { RunShell } from "@/components/RunShell";
 import { categoryLabel, isCategoryId } from "@/lib/categories";
-import Link from "next/link";
 
-export default async function CategoryPlayPage({
+export default function CategoryPlayPage({
+  params,
+}: {
+  params: Promise<{ category: string }>;
+}) {
+  return (
+    <Suspense fallback={<p className="text-muted">Loading…</p>}>
+      <CategoryPlay params={params} />
+    </Suspense>
+  );
+}
+
+async function CategoryPlay({
   params,
 }: {
   params: Promise<{ category: string }>;

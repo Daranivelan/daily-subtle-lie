@@ -5,8 +5,9 @@ import {
   sampleMatchedOnly,
   setIdFor,
 } from "@/lib/daily-set";
-import { getDB } from "@/lib/d1";
+import { getDB, getEnv } from "@/lib/d1";
 import { puzzleFromWikipedia } from "@/lib/generate-topic-puzzle";
+import { generateLlmPuzzles, hasLlmKeys } from "@/lib/llm-puzzle";
 import { utcToday } from "@/lib/puzzle";
 import { deobfuscateReveal } from "@/lib/reveal";
 import type { WikiArticle } from "@/lib/wikipedia";
@@ -48,7 +49,7 @@ async function persistGenerated(puzzles: PuzzlePublic[]) {
   }
 }
 
-function tryAdd(
+function tryHeuristicAdd(
   article: WikiArticle,
   query: string,
   variant: number,
@@ -78,6 +79,8 @@ export async function GET(request: Request) {
   }
 
   const db = await getDB();
+  const env = await getEnv();
+  const llmKeys = hasLlmKeys(env);
   const today = utcToday();
   const { results } = await db
     .prepare("SELECT * FROM pool_puzzles WHERE status = 'approved'")
@@ -87,7 +90,6 @@ export async function GET(request: Request) {
   const puzzles: PuzzlePublic[] = sampleMatchedOnly(matched, today, q);
   const usedTopics = new Set(puzzles.map((p) => p.topic.toLowerCase()));
 
-  // Cached pool hit — fastest path
   if (puzzles.length >= SET_SIZE) {
     return NextResponse.json(
       {
@@ -105,24 +107,22 @@ export async function GET(request: Request) {
   }
 
   let wikiError: string | null = null;
+  let llmError: string | null = null;
+  let llmBuilt = 0;
+  let heuristicBuilt = 0;
   const collectedArticles: WikiArticle[] = [];
 
   try {
     const titles = await relatedWikipediaTitles(raw.trim() || q);
-    const generated: PuzzlePublic[] = [...puzzles];
-    // rebuild used from generated which starts as pool matches
-    // (puzzles already in usedTopics)
-
     if (!titles.length) {
       wikiError =
         "Wikipedia is busy or returned no articles. Try again in a moment.";
     }
 
-    // Few small waves, then pad from variants (no extra network)
     const waveSize = 3;
     for (
       let i = 0;
-      i < Math.min(titles.length, 12) && generated.length < SET_SIZE;
+      i < Math.min(titles.length, 12) && collectedArticles.length < 12;
       i += waveSize
     ) {
       const articles = await fetchWikipediaExtracts(
@@ -130,25 +130,48 @@ export async function GET(request: Request) {
         waveSize,
       );
       collectedArticles.push(...articles);
-      for (const article of articles) {
-        tryAdd(article, q, 0, usedTopics, generated);
-        if (generated.length >= SET_SIZE) break;
-      }
     }
 
-    for (const variant of [1, 2, 3]) {
-      if (generated.length >= SET_SIZE) break;
+    // Prefer Gemini + Jev for missing slots (same quality as nightly generator).
+    if (llmKeys && puzzles.length < SET_SIZE && collectedArticles.length) {
+      try {
+        const need = SET_SIZE - puzzles.length;
+        const llmPuzzles = await generateLlmPuzzles(
+          collectedArticles,
+          q,
+          llmKeys,
+          need,
+          usedTopics,
+          2,
+        );
+        llmBuilt = llmPuzzles.length;
+        puzzles.push(...llmPuzzles);
+        if (llmPuzzles.length) void persistGenerated(llmPuzzles);
+      } catch (err) {
+        llmError = err instanceof Error ? err.message : "LLM generation failed";
+        console.error("topic llm generation failed", err);
+      }
+    } else if (!llmKeys && puzzles.length < SET_SIZE) {
+      llmError = "GEMINI_API_KEY / TYPESAFE_API_KEY not configured on the worker";
+    }
+
+    // Heuristic Wikipedia fill only if still short (fallback).
+    if (puzzles.length < SET_SIZE) {
       for (const article of collectedArticles) {
-        tryAdd(article, q, variant, usedTopics, generated);
-        if (generated.length >= SET_SIZE) break;
+        tryHeuristicAdd(article, q, 0, usedTopics, puzzles);
+        if (puzzles.length >= SET_SIZE) break;
       }
+      for (const variant of [1, 2, 3]) {
+        if (puzzles.length >= SET_SIZE) break;
+        for (const article of collectedArticles) {
+          tryHeuristicAdd(article, q, variant, usedTopics, puzzles);
+          if (puzzles.length >= SET_SIZE) break;
+        }
+      }
+      heuristicBuilt = puzzles.length - matched.length - llmBuilt;
+      const freshHeuristic = puzzles.filter((p) => p.id.startsWith("gen-"));
+      if (freshHeuristic.length) void persistGenerated(freshHeuristic);
     }
-
-    puzzles.length = 0;
-    puzzles.push(...generated);
-
-    const fresh = generated.filter((p) => p.id.startsWith("gen-"));
-    if (fresh.length) void persistGenerated(fresh);
   } catch (err) {
     wikiError = err instanceof Error ? err.message : "Wikipedia fetch failed";
     console.error("topic wikipedia generation failed", err);
@@ -159,17 +182,28 @@ export async function GET(request: Request) {
       {
         error:
           puzzles.length > 0
-            ? `Only found ${puzzles.length}/10 on-topic puzzles for “${raw.trim()}”. Wait a few seconds and try again (Wikipedia rate limits).`
-            : `Could not build puzzles for “${raw.trim()}” yet. Wait a moment and retry — first-time topics hit Wikipedia live.`,
+            ? `Only found ${puzzles.length}/10 on-topic puzzles for “${raw.trim()}”. Wait a few seconds and try again.`
+            : `Could not build puzzles for “${raw.trim()}” yet. Wait a moment and retry.`,
         needed: SET_SIZE,
         available: puzzles.length,
         matched: matched.length,
+        llmBuilt,
         wikiError,
+        llmError,
         ms: Date.now() - started,
       },
       { status: 503 },
     );
   }
+
+  const source =
+    llmBuilt > 0 && heuristicBuilt <= 0 && matched.length === 0
+      ? "gemini+jev"
+      : llmBuilt > 0
+        ? "mixed"
+        : matched.length >= SET_SIZE
+          ? "pool"
+          : "wikipedia";
 
   return NextResponse.json(
     {
@@ -178,7 +212,8 @@ export async function GET(request: Request) {
       mode: `topic:${q}`,
       query: q,
       matched: matched.length,
-      source: matched.length >= SET_SIZE ? "pool" : "wikipedia",
+      llmBuilt,
+      source,
       ms: Date.now() - started,
       puzzles: puzzles.slice(0, SET_SIZE),
     },

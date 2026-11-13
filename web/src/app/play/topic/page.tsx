@@ -1,6 +1,19 @@
+import { Suspense } from "react";
 import { TopicPlayClient } from "@/components/TopicPlayClient";
 
-export default async function TopicPlayPage({
+export default function TopicPlayPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ q?: string }>;
+}) {
+  return (
+    <Suspense fallback={<p className="text-muted">Loading…</p>}>
+      <TopicPlay searchParams={searchParams} />
+    </Suspense>
+  );
+}
+
+async function TopicPlay({
   searchParams,
 }: {
   searchParams: Promise<{ q?: string }>;

@@ -27,8 +27,9 @@ from typesafe_sdk import Noul, TypeSafeClient
 # ---------------------------------------------------------------------------
 
 BUFFER = 14
-POOL_TARGET = 40  # approved pool puzzles desired per category
+POOL_TARGET = int(os.environ.get("POOL_TARGET", "40"))  # approved pool puzzles desired per category
 STATUS = "approved" if os.environ.get("AUTO_APPROVE") == "1" else "review"
+DAILY_ONLY = "--daily-only" in sys.argv
 MAX_RETRIES = 3
 BACKOFF_BASE = 2  # seconds
 
@@ -106,8 +107,11 @@ class Draft(BaseModel):
 if os.environ.get("GEMINI_API_KEY") and not os.environ.get("GOOGLE_API_KEY"):
     os.environ["GOOGLE_API_KEY"] = os.environ["GEMINI_API_KEY"]
 
+# gemini-2.0-flash is retired. Prefer a currently available flash model.
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
+
 agent = Agent(
-    "google:gemini-2.0-flash",
+    f"google:{GEMINI_MODEL}",
     output_type=Draft,
     system_prompt=SYSTEM,
     retries=2,
@@ -128,15 +132,28 @@ def d1(sql: str, params: tuple = ()) -> list[dict]:
                 json={"sql": sql, "params": list(params)},
                 timeout=30,
             )
-            r.raise_for_status()
-            return r.json()["result"][0]["results"]
-        except (httpx.HTTPStatusError, httpx.RequestError, KeyError) as exc:
+            if r.status_code >= 400:
+                detail = r.text[:400]
+                raise httpx.HTTPStatusError(
+                    f"{r.status_code} {detail}",
+                    request=r.request,
+                    response=r,
+                )
+            payload = r.json()
+            if not payload.get("success", True):
+                raise RuntimeError(f"D1 error: {payload.get('errors')}")
+            return payload["result"][0]["results"]
+        except (httpx.HTTPStatusError, httpx.RequestError, KeyError, RuntimeError) as exc:
             if attempt < MAX_RETRIES - 1:
                 wait = BACKOFF_BASE ** (attempt + 1)
                 logger.warning("D1 request failed (attempt %d): %s — retrying in %ds", attempt + 1, exc, wait)
                 time.sleep(wait)
             else:
                 logger.error("D1 request failed after %d attempts: %s", MAX_RETRIES, exc)
+                logger.error(
+                    "If this is a permission error, grant the CF_API_TOKEN "
+                    "Account → D1 → Edit, or apply SQL via `wrangler d1 execute --remote`."
+                )
                 raise
 
 
@@ -163,15 +180,27 @@ def fetch_source(title: str) -> tuple[str, str]:
                     "titles": title,
                     "format": "json",
                 },
-                headers={"User-Agent": "daily-subtle-lie/1.0"},
+                headers={
+                    # Wikimedia requires a descriptive UA with contact info
+                    "User-Agent": (
+                        "DailySubtleLieBot/1.0 "
+                        "(https://github.com/daily-subtle-lie; puzzle-generator; "
+                        "contact: daily-subtle-lie@example.com)"
+                    ),
+                    "Accept": "application/json",
+                },
                 timeout=20,
             )
             r.raise_for_status()
             page = next(iter(r.json()["query"]["pages"].values()))
+            # Gentle pacing to stay under Wikimedia bot limits
+            time.sleep(0.4)
             return page.get("extract", "")[:6000], url
         except (httpx.HTTPStatusError, httpx.RequestError) as exc:
             if attempt < MAX_RETRIES - 1:
                 wait = BACKOFF_BASE ** (attempt + 1)
+                if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 403:
+                    wait = max(wait, 8)
                 logger.warning(
                     "Wikipedia fetch failed for '%s' (attempt %d): %s — retrying in %ds",
                     title, attempt + 1, exc, wait,
@@ -272,8 +301,19 @@ def build(topic: dict) -> dict | None:
                 "Generation error for '%s' (attempt %d/%d): %s",
                 topic["title"], attempt + 1, MAX_RETRIES, exc,
             )
+            msg = str(exc).lower()
+            # Free-tier daily quota — further retries waste hours
+            if "429" in msg or "resource_exhausted" in msg or "quota" in msg:
+                logger.error(
+                    "Gemini quota exhausted — stop this run and retry after reset "
+                    "or with a billed key (GEMINI_API_KEY)."
+                )
+                raise SystemExit(2) from exc
             if attempt < MAX_RETRIES - 1:
-                time.sleep(BACKOFF_BASE ** (attempt + 1))
+                wait = BACKOFF_BASE ** (attempt + 1)
+                if "503" in msg or "unavailable" in msg or "high demand" in msg:
+                    wait = max(wait, 10 * (attempt + 1))
+                time.sleep(wait)
 
     logger.warning("All %d attempts failed for topic '%s'", MAX_RETRIES, topic["title"])
     return None
@@ -340,9 +380,44 @@ def insert_pool(p: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
+def reset_daily_buffer(today: dt.date) -> int:
+    """Delete dated dailies from today through today+BUFFER-1 so they can be rebuilt."""
+    end = (today + dt.timedelta(days=BUFFER - 1)).isoformat()
+    start = today.isoformat()
+    existing = d1(
+        "SELECT date, topic FROM puzzles WHERE date >= ? AND date <= ?",
+        (start, end),
+    )
+    d1(
+        "DELETE FROM puzzles WHERE date >= ? AND date <= ?",
+        (start, end),
+    )
+    logger.info(
+        "Reset daily buffer — deleted %d puzzles from %s to %s",
+        len(existing),
+        start,
+        end,
+    )
+    return len(existing)
+
+
 def main() -> None:
     _setup_logging()
-    logger.info("Generator started — buffer=%d, status=%s", BUFFER, STATUS)
+    reset_daily = "--reset-daily" in sys.argv
+    logger.info(
+        "Generator started — buffer=%d, status=%s, reset_daily=%s",
+        BUFFER,
+        STATUS,
+        reset_daily,
+    )
+
+    today = dt.datetime.now(dt.timezone.utc).date()
+    if reset_daily:
+        try:
+            reset_daily_buffer(today)
+        except Exception as exc:
+            logger.error("Failed to reset daily buffer: %s", exc)
+            sys.exit(1)
 
     # Fetch existing rows
     try:
@@ -371,7 +446,6 @@ def main() -> None:
         logger.warning("Topic pool running low — only %d topics remaining!", len(pool))
 
     # Fill daily buffer
-    today = dt.datetime.now(dt.timezone.utc).date()
     filled = 0
     for offset in range(BUFFER):
         day = (today + dt.timedelta(days=offset)).isoformat()
@@ -399,6 +473,23 @@ def main() -> None:
             approved_by_cat[r["category"]] += 1
 
     pool_filled = 0
+    if DAILY_ONLY:
+        logger.info("Skipping pool top-up (--daily-only)")
+        for category in CATEGORIES:
+            count = approved_by_cat[category]
+            if count < 10:
+                logger.warning(
+                    "LOW POOL: category %s has only %d approved puzzles (< 10)",
+                    category,
+                    count,
+                )
+        logger.info(
+            "Generator finished — filled %d daily slots, %d pool puzzles",
+            filled,
+            pool_filled,
+        )
+        return
+
     for category in CATEGORIES:
         need = max(0, POOL_TARGET - approved_by_cat[category])
         if need == 0:
